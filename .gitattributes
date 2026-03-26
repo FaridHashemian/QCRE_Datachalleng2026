@@ -1,0 +1,2 @@
+DataFile/train_weights/ssl_sup_supervised_best_train_proxy.pt filter=lfs diff=lfs merge=lfs -text
+DataFile/train_weights/ssl_sup_pseudo_v2_pseudo_best_train_proxy.pt filter=lfs diff=lfs merge=lfs -text
