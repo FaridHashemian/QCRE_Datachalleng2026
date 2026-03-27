@@ -91,15 +91,13 @@ This processes every image in `DataFile/test_data/`, detects the four perforatio
 
 ```bash
 python predict_test.py \
-  --run_name sample_ssl_sup \
+  --checkpoint_path DataFile/trained_weights/ssl_sup_pseudo_v2_pseudo_best_train_proxy.pt \
   --roi_test_dir DataFile/roi_data/test \
-  --template_csv DataFile/test_detection.csv \
-  --output_csv DataFile/submission_test.csv \
-  --device auto \
-  --defect_threshold 0.42 \
-  --dt1_threshold 0.38 \
-  --dt2_threshold 0.61 \
-  --dt3_threshold 0.47
+  --output_csv DataFile/test_result.csv \ 
+  --defect_threshold 0.5 \
+  --dt1_threshold 0.99 \
+  --dt2_threshold 0.20 \
+  --dt3_threshold 0.20
 ```
 
 The submission CSV is written to `DataFile/submission_test.csv`.
@@ -108,6 +106,7 @@ The submission CSV is written to `DataFile/submission_test.csv`.
 
 | Argument | Description |
 |----------|-------------|
+| `--checkpoint_path` | Path to the model run to load from `DataFile/trained_weights/` |
 | `--run_name` | Name of the trained model run to load from `DataFile/trained_weights/` |
 | `--roi_test_dir` | Path to the extracted test ROI tensors (output of Step 3) |
 | `--template_csv` | Competition-provided test image list CSV |

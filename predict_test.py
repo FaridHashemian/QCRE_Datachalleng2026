@@ -19,8 +19,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent
 DATA_ROOT = PROJECT_ROOT / "DataFile"
 
 ROI_TEST_DIR = DATA_ROOT / "roi_data" / "test"
-TEMPLATE_CSV = DATA_ROOT / "test_detection.csv"
-DEFAULT_OUTPUT_CSV = DATA_ROOT / "submission_test.csv"
+DEFAULT_OUTPUT_CSV = DATA_ROOT / "test_results.csv"
 
 WEIGHTS_DIR = DATA_ROOT / "trained_weights"
 LOG_DIR = DATA_ROOT / "logs"
@@ -146,7 +145,6 @@ def load_model(ckpt_path: Path, device: torch.device) -> MultiTaskClassifier:
         raise ValueError(f"Checkpoint {ckpt_path} does not contain model_state_dict")
 
     state = ckpt["model_state_dict"]
-    # In case the checkpoint was saved from DataParallel/DDP
     if any(k.startswith("module.") for k in state.keys()):
         state = {k.replace("module.", "", 1): v for k, v in state.items()}
 
@@ -189,6 +187,7 @@ def run_inference(
                 dt1, dt2, dt3 = 0, 0, 0
 
             results[img_id] = {
+                "Image_id": img_id,
                 "Defect": defect,
                 "DT1(Missing_Perforations)": dt1,
                 "DT2(Touching_Perforations)": dt2,
@@ -210,7 +209,6 @@ def main():
     parser.add_argument("--run_name", type=str, default=None)
     parser.add_argument("--checkpoint_path", type=str, default=None)
     parser.add_argument("--roi_test_dir", type=str, default=str(ROI_TEST_DIR))
-    parser.add_argument("--template_csv", type=str, default=str(TEMPLATE_CSV))
     parser.add_argument("--output_csv", type=str, default=str(DEFAULT_OUTPUT_CSV))
     parser.add_argument("--device", type=str, default="auto")
     parser.add_argument("--batch_size", type=int, default=64)
@@ -252,8 +250,6 @@ def main():
         dt3_threshold=args.dt3_threshold,
     )
 
-    df = pd.read_csv(args.template_csv)
-
     required_cols = [
         "Image_id",
         "Defect",
@@ -261,45 +257,36 @@ def main():
         "DT2(Touching_Perforations)",
         "DT3(Out_Of_Bounds)",
     ]
-    for c in required_cols:
-        if c not in df.columns:
-            raise ValueError(f"Missing required column in template: {c}")
 
-    missing_ids = []
-    for i in range(len(df)):
-        img_id = df.loc[i, "Image_id"]
-        if img_id not in preds:
-            missing_ids.append(img_id)
-            continue
+    rows = []
+    for image_id in sorted(preds.keys()):
+        row = preds[image_id]
+        rows.append({
+            "Image_id": image_id,
+            "Defect": int(row["Defect"]),
+            "DT1(Missing_Perforations)": int(row["DT1(Missing_Perforations)"]),
+            "DT2(Touching_Perforations)": int(row["DT2(Touching_Perforations)"]),
+            "DT3(Out_Of_Bounds)": int(row["DT3(Out_Of_Bounds)"]),
+        })
 
-        row = preds[img_id]
-        df.loc[i, "Defect"] = int(row["Defect"])
-        df.loc[i, "DT1(Missing_Perforations)"] = int(row["DT1(Missing_Perforations)"])
-        df.loc[i, "DT2(Touching_Perforations)"] = int(row["DT2(Touching_Perforations)"])
-        df.loc[i, "DT3(Out_Of_Bounds)"] = int(row["DT3(Out_Of_Bounds)"])
+    df = pd.DataFrame(rows, columns=required_cols)
 
     out_path = Path(args.output_csv)
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    df[required_cols].to_csv(out_path, index=False)
+    df.to_csv(out_path, index=False)
     print(f"Saved submission CSV to: {out_path}")
-
-    if missing_ids:
-        miss_path = out_path.with_name(out_path.stem + "_missing_ids.txt")
-        miss_path.write_text("\n".join(missing_ids))
-        print(f"Warning: {len(missing_ids)} template IDs had no matching .npy file. Saved list to: {miss_path}")
 
     if args.save_probs:
         prob_rows = []
-        for img_id in df["Image_id"].tolist():
-            if img_id in preds:
-                r = preds[img_id]
-                prob_rows.append({
-                    "Image_id": img_id,
-                    "_Defect_prob": r["_Defect_prob"],
-                    "_DT1_prob": r["_DT1_prob"],
-                    "_DT2_prob": r["_DT2_prob"],
-                    "_DT3_prob": r["_DT3_prob"],
-                })
+        for image_id in sorted(preds.keys()):
+            r = preds[image_id]
+            prob_rows.append({
+                "Image_id": image_id,
+                "_Defect_prob": r["_Defect_prob"],
+                "_DT1_prob": r["_DT1_prob"],
+                "_DT2_prob": r["_DT2_prob"],
+                "_DT3_prob": r["_DT3_prob"],
+            })
         prob_df = pd.DataFrame(prob_rows)
         prob_path = out_path.with_name(out_path.stem + "_with_probs.csv")
         prob_df.to_csv(prob_path, index=False)

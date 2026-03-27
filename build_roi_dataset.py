@@ -236,19 +236,67 @@ def detect_roi_boxes(gray: np.ndarray):
 # Fallback template
 # =============================================================================
 
+def _build_geometric_fallback_template_from_shape(H: int, W: int) -> np.ndarray:
+    """
+    Build a deterministic 4-box template from image geometry alone.
+
+    Order:
+        left-top, left-bottom, right-top, right-bottom
+    """
+    mid = W // 2
+
+    half_w = max(1, mid)
+    box_w = max(32, int(round(half_w * 0.34)))
+    box_h = max(32, int(round(H * 0.18)))
+
+    left_x = max(0, int(round(half_w * 0.5 - box_w / 2)))
+    right_x = max(mid, int(round(mid + half_w * 0.5 - box_w / 2)))
+
+    top_y = max(0, int(round(H * 0.22 - box_h / 2)))
+    bottom_y = max(0, int(round(H * 0.72 - box_h / 2)))
+
+    def _clip_box(x: int, y: int, w: int, h: int) -> list[int]:
+        x = max(0, min(x, W - 1))
+        y = max(0, min(y, H - 1))
+        w = max(1, min(w, W - x))
+        h = max(1, min(h, H - y))
+        return [x, y, w, h]
+
+    template = np.array([
+        _clip_box(left_x, top_y, box_w, box_h),
+        _clip_box(left_x, bottom_y, box_w, box_h),
+        _clip_box(right_x, top_y, box_w, box_h),
+        _clip_box(right_x, bottom_y, box_w, box_h),
+    ], dtype=np.int32)
+    return template
+
+
+def _build_geometric_fallback_template_from_dir(src_dir: Path) -> np.ndarray:
+    img_paths = collect_images(src_dir)
+    if len(img_paths) == 0:
+        raise RuntimeError(f"No images found in {src_dir} to build a geometric fallback template.")
+
+    gray = np.array(Image.open(img_paths[0]).convert("L"))
+    H, W = gray.shape
+    return _build_geometric_fallback_template_from_shape(H, W)
+
+
 def compute_fallback_template(
     src_dir: Path,
     max_images: Optional[int] = None,
+    allow_geometric_fallback: bool = True,
 ) -> np.ndarray:
     """
-    Build a 4-box fallback template using the median of successful detections.
+    Build a 4-box fallback template.
+
+    Priority:
+      1) median of successful detections
+      2) geometry-only template from the first image in src_dir
 
     Returns:
         template_boxes: (4, 4) int32 array [x, y, w, h]
     """
-    img_paths = []
-    for ext in ("*.jpg", "*.jpeg", "*.png", "*.bmp", "*.tif", "*.tiff"):
-        img_paths.extend(sorted(src_dir.glob(ext)))
+    img_paths = collect_images(src_dir)
 
     if max_images is not None:
         img_paths = img_paths[:max_images]
@@ -261,14 +309,21 @@ def compute_fallback_template(
         if detect_ok and np.all(boxes[:, 2] > 0) and np.all(boxes[:, 3] > 0):
             good_boxes.append(boxes)
 
-    if len(good_boxes) == 0:
-        raise RuntimeError(
-            "Could not compute fallback template because no successful detections were found."
-        )
-
-    good_boxes = np.stack(good_boxes, axis=0)  # (N, 4, 4)
-    template = np.median(good_boxes, axis=0)
-    template = np.round(template).astype(np.int32)
+    if len(good_boxes) > 0:
+        good_boxes = np.stack(good_boxes, axis=0)  # (N, 4, 4)
+        template = np.median(good_boxes, axis=0)
+        template = np.round(template).astype(np.int32)
+    else:
+        if not allow_geometric_fallback:
+            raise RuntimeError(
+                f"Could not compute fallback template from {src_dir} because no successful detections were found."
+            )
+        if len(img_paths) == 0:
+            raise RuntimeError(
+                f"Could not compute fallback template from {src_dir} because no images were found."
+            )
+        print(f"No successful detections found in {src_dir}; using geometry-based fallback template.")
+        template = _build_geometric_fallback_template_from_dir(src_dir)
 
     FALLBACK_TEMPLATE_PATH.parent.mkdir(parents=True, exist_ok=True)
     np.save(FALLBACK_TEMPLATE_PATH, template)
@@ -276,10 +331,30 @@ def compute_fallback_template(
     return template
 
 
-def load_or_build_fallback_template(template_source_dir: Path) -> np.ndarray:
+def load_or_build_fallback_template(
+    template_source_dir: Path,
+    backup_source_dir: Optional[Path] = None,
+) -> np.ndarray:
     if FALLBACK_TEMPLATE_PATH.exists():
         return np.load(FALLBACK_TEMPLATE_PATH)
-    return compute_fallback_template(template_source_dir)
+
+    candidate_dirs = []
+    if template_source_dir is not None:
+        candidate_dirs.append(Path(template_source_dir))
+    if backup_source_dir is not None and Path(backup_source_dir) not in candidate_dirs:
+        candidate_dirs.append(Path(backup_source_dir))
+
+    last_error = None
+    for src_dir in candidate_dirs:
+        try:
+            return compute_fallback_template(src_dir)
+        except Exception as e:
+            print(f"Failed to build fallback template from {src_dir}: {e}")
+            last_error = e
+
+    if last_error is not None:
+        raise last_error
+    raise RuntimeError("No valid source directory was provided to build the fallback template.")
 
 
 # =============================================================================
@@ -529,9 +604,6 @@ def main():
     if args.rebuild_fallback and FALLBACK_TEMPLATE_PATH.exists():
         FALLBACK_TEMPLATE_PATH.unlink()
 
-    fallback_template = load_or_build_fallback_template(args.template_source)
-    print(f"Fallback template loaded: {FALLBACK_TEMPLATE_PATH}")
-
     split_map = {
         "train": (TRAIN_DIR, ROI_TRAIN_DIR),
         "validation": (VAL_DIR, ROI_VAL_DIR),
@@ -541,6 +613,11 @@ def main():
 
     if args.only_split is not None:
         src_dir, out_dir = split_map[args.only_split]
+        fallback_template = load_or_build_fallback_template(
+            args.template_source,
+            backup_source_dir=src_dir,
+        )
+        print(f"Fallback template loaded: {FALLBACK_TEMPLATE_PATH}")
         process_split(
             src_dir=src_dir,
             out_dir=out_dir,
@@ -550,6 +627,8 @@ def main():
             save_debug=args.save_debug,
         )
     else:
+        fallback_template = load_or_build_fallback_template(args.template_source)
+        print(f"Fallback template loaded: {FALLBACK_TEMPLATE_PATH}")
         for split_name, (src_dir, out_dir) in split_map.items():
             process_split(
                 src_dir=src_dir,
