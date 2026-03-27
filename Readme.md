@@ -69,9 +69,7 @@ This creates `roi_data/`, `roi_data/test/`, `trained_weights/`, `logs/`, and oth
 Run the ROI extractor targeting the test split:
 
 ```bash
-python build_roi_dataset.py \
-  --only_split test \
-  --workers 8
+python build_roi_dataset.py --only_split test --workers 8
 ```
 
 This processes every image in `DataFile/test_data/`, detects the four perforation panel regions per image, and saves a 4-channel `.npy` tensor for each image into `DataFile/roi_data/test/`. If detection fails for an image, a learned fallback template is used automatically.
@@ -91,13 +89,7 @@ This processes every image in `DataFile/test_data/`, detects the four perforatio
 
 ```bash
 python predict_test.py \
-  --checkpoint_path DataFile/trained_weights/ssl_sup_pseudo_v2_pseudo_best_train_proxy.pt \
-  --roi_test_dir DataFile/roi_data/test \
-  --output_csv DataFile/test_result.csv \ 
-  --defect_threshold 0.5 \
-  --dt1_threshold 0.99 \
-  --dt2_threshold 0.20 \
-  --dt3_threshold 0.20
+  --checkpoint_path DataFile/trained_weights/ssl_sup_pseudo_v2_pseudo_best_train_proxy.pt --roi_test_dir DataFile/roi_data/test --output_csv DataFile/test_result.csv --defect_threshold 0.5 --dt1_threshold 0.99 --dt2_threshold 0.20 --dt3_threshold 0.20
 ```
 
 The submission CSV is written to `DataFile/submission_test.csv`.
